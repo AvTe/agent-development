@@ -7,7 +7,8 @@ import { parseResume } from '@/lib/resumeParser';
 
 // Use CJS require to ensure pdf-parse is loaded as a callable function in both dev and prod.
 const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse');
+const pdfModule = require('pdf-parse');
+const pdfParse = pdfModule.default || pdfModule;
 
 export async function POST(request) {
   try {
