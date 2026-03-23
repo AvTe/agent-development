@@ -1,7 +1,16 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 
-const dbPath = path.join(process.cwd(), 'jobhunter.db');
+const dbPath = (() => {
+  const fromEnv = process.env.DB_PATH;
+  const resolved = fromEnv ? path.resolve(fromEnv) : path.join(process.cwd(), 'jobhunter.db');
+  const dir = path.dirname(resolved);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return resolved;
+})();
 
 let db;
 
