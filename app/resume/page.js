@@ -44,14 +44,31 @@ function normalizeResumeRecord(record) {
 
 export default function ResumePage() {
   const [resumes, setResumes] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [matches, setMatches] = useState([]);
+  const [matching, setMatching] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [error, setError] = useState('');
+  const [matchError, setMatchError] = useState('');
+  const [recommended, setRecommended] = useState([]);
   const { showToast } = useToast();
 
   useEffect(() => {
-    fetchResumes();
+    fetchInitial();
   }, []);
+
+  useEffect(() => {
+    if (selected?.id) {
+      refreshRecommendations(selected.id);
+    } else {
+      setRecommended([]);
+    }
+  }, [selected, matches, jobs]);
+
+  async function fetchInitial() {
+    await Promise.all([fetchResumes(), fetchJobs(), fetchMatches()]);
+  }
 
   async function fetchResumes() {
     try {
@@ -62,6 +79,83 @@ export default function ResumePage() {
       if (normalized.length > 0 && !selected) setSelected(normalized[0]);
     } catch (err) {
       console.error('Fetch error:', err);
+    }
+  }
+
+  async function fetchJobs() {
+    try {
+      const res = await fetch('/api/jobs');
+      const data = await res.json();
+      const normalized = Array.isArray(data?.data) ? data.data : Array.isArray(data?.jobs) ? data.jobs : [];
+      setJobs(normalized);
+    } catch (err) {
+      console.error('Jobs fetch error:', err);
+    }
+  }
+
+  async function fetchMatches() {
+    try {
+      const res = await fetch('/api/match');
+      const data = await res.json();
+      setMatches(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Match fetch error:', err);
+    }
+  }
+
+  function refreshRecommendations(resumeId) {
+    if (!resumeId) return;
+    const recs = matches
+      .filter((m) => Number(m.resume_id) === Number(resumeId))
+      .sort((a, b) => Number(b.score) - Number(a.score));
+    setRecommended(recs);
+  }
+
+  async function autoMatchResume(resumeRecord) {
+    if (!resumeRecord?.id) return;
+    setMatching(true);
+    setMatchError('');
+    try {
+      // Ensure we have jobs and matches
+      if (jobs.length === 0) {
+        await fetchJobs();
+      }
+      if (matches.length === 0) {
+        await fetchMatches();
+      }
+      const matchedJobIds = new Set(
+        matches.filter((m) => Number(m.resume_id) === Number(resumeRecord.id)).map((m) => Number(m.job_id))
+      );
+      const jobsToMatch = jobs.filter((j) => !matchedJobIds.has(Number(j.id)));
+
+      const newMatches = [];
+      for (const job of jobsToMatch) {
+        try {
+          const res = await fetch('/api/match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ resume_id: Number(resumeRecord.id), job_id: Number(job.id) }),
+          });
+          const data = await res.json();
+          if (res.ok) {
+            newMatches.push(data);
+          }
+        } catch (err) {
+          console.error('Auto-match error:', err);
+        }
+      }
+      if (newMatches.length > 0) {
+        const updated = [...matches, ...newMatches];
+        setMatches(updated);
+        refreshRecommendations(resumeRecord.id);
+        showToast('Recommended jobs refreshed.');
+      } else if (jobsToMatch.length === 0) {
+        showToast('Recommendations are already up to date.');
+      }
+    } catch (err) {
+      setMatchError('Failed to refresh recommendations.');
+    } finally {
+      setMatching(false);
     }
   }
 
@@ -87,6 +181,7 @@ export default function ResumePage() {
       setResumes((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)]);
       setSelected(normalized);
       showToast('Profile asset captured and analyzed.');
+      await autoMatchResume(normalized);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -162,7 +257,7 @@ export default function ResumePage() {
                   <p className="font-bold text-sm truncate text-slate-900">{r.parsed_data?.name || r.filename}</p>
                   <p className="text-[10px] font-bold text-[#1a73e8] uppercase tracking-widest mt-1.5">{new Date(r.created_at).toLocaleDateString()}</p>
                 </button>
-              ))}
+              ))}             
             </div>
           )}
         </div>
@@ -175,10 +270,23 @@ export default function ResumePage() {
                   <h3 className="text-2xl font-black text-slate-900 leading-tight">{parsed.name || 'Asset Discovery'}</h3>
                   <p className="text-sm font-bold text-[#4285F4] mt-1">{parsed.email || 'analytics@system.core'}</p>
                 </div>
-                <button className="px-8 py-3 rounded-full bg-blue-50 text-[#1a73e8] text-xs font-bold hover:bg-blue-100 transition-all border border-[#d2e3fc]">Export Asset</button>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => autoMatchResume(selectedResume)}
+                    disabled={matching}
+                    className="px-8 py-3 rounded-full bg-[#4285F4] text-white text-xs font-bold hover:bg-[#1a73e8] transition-all border border-[#d2e3fc] disabled:opacity-60"
+                  >
+                    {matching ? 'Refreshing…' : 'Refresh Recommendations'}
+                  </button>
+                  <button className="px-8 py-3 rounded-full bg-blue-50 text-[#1a73e8] text-xs font-bold hover:bg-blue-100 transition-all border border-[#d2e3fc]">
+                    Export Asset
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-12">
+                {matchError && <p className="text-red-500 text-[11px] font-bold bg-red-50 p-3 rounded-[14px] border border-red-100">{matchError}</p>}
+
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="bg-slate-50/50 p-6 rounded-[24px] border border-slate-100">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Location</p>
@@ -192,6 +300,32 @@ export default function ResumePage() {
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Experience</p>
                     <p className="text-sm font-bold text-slate-900 mt-2">{parsed.total_experience_years ?? 0} years</p>
                   </div>
+                </div>
+
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Recommended Jobs</p>
+                    <a href="/jobs" className="text-[11px] font-bold text-[#4285F4] hover:underline">Go to Jobs</a>
+                  </div>
+                  {recommended.length === 0 ? (
+                    <p className="text-sm font-medium text-slate-400 italic">No recommendations yet.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {recommended.map((m) => (
+                        <div key={m.id} className="border border-slate-100 rounded-[16px] p-4 flex items-center justify-between bg-slate-50/40">
+                          <div>
+                            <p className="text-sm font-bold text-slate-900">{m.job_title}</p>
+                            <p className="text-xs font-semibold text-slate-500">{m.job_company || 'Unknown company'}</p>
+                            <p className="text-xs font-medium text-slate-500 mt-1 line-clamp-2">{m.analysis?.fit_summary || 'Match analysis available.'}</p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="px-3 py-1 rounded-full text-[10px] font-black text-[#4285F4] bg-blue-50 border border-blue-100">{m.score}% fit</span>
+                            <a href="/match" className="text-[11px] font-bold text-[#4285F4] hover:underline">Details</a>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-5">
